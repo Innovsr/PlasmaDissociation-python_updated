@@ -214,7 +214,10 @@ def organise_modes(modes,atoms):
     return numeric_modes
 
 if __name__ == "__main__":
-    with open('../inputs.json') as f:
+    input_file = os.environ.get("PLASMA_INPUTS", "../inputs.json")
+
+    with open(input_file) as f:
+    #with open('../inputs.json') as f:
         inputs=json.load(f)
     if inputs["Molecule_data"]["Geom_flg"] == "PubChem":
         symbols,coordinates = get_geometry_pubchem(inputs["Molecule_data"]["Molecule"])
@@ -223,6 +226,9 @@ if __name__ == "__main__":
         generate_bondarr(symbols, coordinates)
     if inputs["Elec_structure"]["method"] == "QChem":
         import qchem as qc
+        import global_vars as gv
+
+        gv.load_global_variables()
         opt_coords, modes = qc.initial_conditions(symbols,coordinates,inputs['HPC']['cores'], inputs['Elec_structure']['Basis'])
     elif inputs["Elec_structure"]["method"] == "PySCF":
         import elec_pyscf as pyscf

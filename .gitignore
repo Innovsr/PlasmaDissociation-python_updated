@@ -1,7 +1,3 @@
-
-/Propylene
-/i-C4H3F7O
-/HFC-236fa
-/EXEC
-/Methane
-/code/__pycache__
+__pycache__/
+*.pyc
+*.pyo

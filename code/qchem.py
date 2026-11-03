@@ -108,7 +108,9 @@ def create_qchem_nac_input(molecule, scf_algorithm="DIIS", Guess=True):
     
     qc_inp = QchemInput(
         molecule,
-        exchange='BHHLYP',
+        #exchange='BHHLYP',
+        #method=gv.exchange,
+        exchange=gv.exchange,
         basis=gv.basis,
         unrestricted=True,
         max_scf_cycles=500,
@@ -197,7 +199,9 @@ def create_qchemforces_input(molecule, scf_algorithm="DIIS", Guess=True, excited
             qc_inp = QchemInput(
                 molecule,
                 jobtype='force',
-                exchange='BHHLYP',
+                #exchange='BHHLYP',
+                #method=gv.exchange,
+                exchange=gv.exchange,
                 scf_guess = coefficients,
                 basis=gv.basis,
                 unrestricted=True,
@@ -210,7 +214,9 @@ def create_qchemforces_input(molecule, scf_algorithm="DIIS", Guess=True, excited
             qc_inp = QchemInput(
                 molecule,
                 jobtype='force',
-                exchange='BHHLYP',
+                #exchange='BHHLYP',
+                #method=gv.exchange,
+                exchange=gv.exchange,
                 basis=gv.basis,
                 unrestricted=True,
                 max_scf_cycles=500,
@@ -223,7 +229,9 @@ def create_qchemforces_input(molecule, scf_algorithm="DIIS", Guess=True, excited
             qc_inp = QchemInput(
                 molecule,
                 jobtype='force',
-                exchange='BHHLYP',
+                #exchange='BHHLYP',
+                #method=gv.exchange,
+                exchange=gv.exchange,
                 scf_guess = coefficients,
                 basis=gv.basis,
                 unrestricted=True,
@@ -238,7 +246,9 @@ def create_qchemforces_input(molecule, scf_algorithm="DIIS", Guess=True, excited
             qc_inp = QchemInput(
                 molecule,
                 jobtype='force',
-                exchange='BHHLYP',
+                #exchange='BHHLYP',
+                #method=gv.exchange,
+                exchange=gv.exchange,
                 basis=gv.basis,
                 unrestricted=True,
                 max_scf_cycles=500,
@@ -508,7 +518,9 @@ def initial_conditions(symbols,coords,cores,basis):
     print(basis)
     qc_inp = QchemInput(molecule,
                         jobtype='opt',
-                        exchange='BHHLYP !50% HF +  50% Becke88 exchange',
+                        #exchange='BHHLYP !50% HF +  50% Becke88 exchange',
+                        #method=gv.exchange,
+                        exchange=gv.exchange,
                         basis=basis,
                         unrestricted=True,
                         max_scf_cycles=500,
@@ -516,6 +528,10 @@ def initial_conditions(symbols,coords,cores,basis):
                         scf_algorithm='diis',
                         extra_rem_keywords={'input_bohr':'true'}
                         )
+    print("DEBUG exchange =", repr(gv.exchange), flush=True)
+    print("DEBUG basis =", repr(basis), flush=True)
+    print("DEBUG Q-Chem input:")
+    print(qc_inp.get_txt(), flush=True)
     
     output = get_output_from_qchem(qc_inp,processors=cores)
     with open('optimisation.out', 'w') as f:
@@ -530,7 +546,9 @@ def initial_conditions(symbols,coords,cores,basis):
     # Find Normal modes
     qc_inp = QchemInput(opt_coords,
                         jobtype='FREQ',
-                        exchange='BHHLYP',
+                        #exchange='BHHLYP',
+                        #method=gv.exchange,
+                        exchange=gv.exchange,
                         basis=basis,
                         extra_rem_keywords={'input_bohr':'true'}
                         )

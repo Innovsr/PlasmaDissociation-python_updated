@@ -116,8 +116,36 @@ def run_simulation(startstep, molecule1, molecule2):
             molecule1 = prop.prop_diss(molecule1)
             guess = dissociated == 0  # Update guess based on dissociation
 
-        if gv.checks > 0:
-            out.run_checks(molecule1,old_coordinates)
+        #if gv.checks > 0:
+        #    out.run_checks(molecule1,old_coordinates)
+
+        # Determine whether checks should be performed at this timestep
+        if gv.checks == 0:
+            do_check = (i == gv.tot_timesteps)
+        
+        elif gv.checks == 1:
+            do_check = (
+                i % gv.check_interval == 0
+                or i == gv.tot_timesteps
+            )
+        
+        elif gv.checks == 2:
+            do_check = True
+        
+        else:
+            raise ValueError(
+                f"Invalid Checks value: {gv.checks}. "
+                "Use 0, 1, or 2."
+            )
+        
+        if do_check:
+            print(
+                f"CHECK RUNNING at MD step {i} "
+                f"(timestep = {molecule1.timestep})",
+                flush=True
+            )
+            out.run_checks(molecule1, old_coordinates)
+    
         time2= time.time()
         molecule1.time[1] = time2-time1
         molecule1.time[3] += time2-time1

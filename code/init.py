@@ -194,10 +194,22 @@ class Molecule:
             'Coupling': self.coupling.tolist() if self.coupling is not None else None,
         }
 
+   # def to_json(self, filename):
+   #     # Serialize the instance to a JSON file
+   #     with open(filename, 'w') as json_file:
+   #         json.dump(self.to_dict(), json_file, indent=2, cls=NumpyEncoder)
+
     def to_json(self, filename):
-        # Serialize the instance to a JSON file
-        with open(filename, 'w') as json_file:
+        # Safely serialize the instance to a JSON file
+        temp_filename = filename + ".tmp"
+
+        with open(temp_filename, 'w') as json_file:
             json.dump(self.to_dict(), json_file, indent=2, cls=NumpyEncoder)
+            json_file.flush()
+            os.fsync(json_file.fileno())
+
+        # Replace the old file only after the new file is fully written
+        os.replace(temp_filename, filename)
 
     @classmethod
     def from_dict(cls, data):
@@ -622,44 +634,200 @@ def read_times_file(filename, target_timestep):
     return times
 
 def find_timestep():
-    """Check and return the congruent timestep from various files."""
+    """
+    Find a safe restart timestep.
+
+    If molecule.json is valid and agrees with the trajectory files,
+    restart from it.
+
+    If molecule.json is missing, empty, corrupted, or disagrees with
+    the trajectory files, reconstruct the Molecule object from the
+    latest common timestep and create a new molecule.json.
+    """
+
+    # Read timesteps available in the trajectory files
+    xyz_timesteps = check_timestep_file('output/xyz.all')
+    momenta_timesteps = check_timestep_file('output/momenta.all')
+    forces_timesteps = check_timestep_file('output/forces.all')
+    time_timesteps = check_timestep_file('output/time.all')
+    
+    common_timesteps = (
+        set(xyz_timesteps)
+        & set(momenta_timesteps)
+        & set(forces_timesteps)
+        & set(time_timesteps)
+    )
+
+
+#    xyz_timesteps = check_timestep_file('output/xyz.all')
+#    momenta_timesteps = check_timestep_file('output/momenta.all')
+#    forces_timesteps = check_timestep_file('output/forces.all')
+#
+#    # Find timesteps that are present in all three files
+#    common_timesteps = (
+#        set(xyz_timesteps)
+#        & set(momenta_timesteps)
+#        & set(forces_timesteps)
+#    )
+
+    if not common_timesteps:
+        print("No congruent timestep found. Setting start_step to 0.")
+        return 0
+
+    # ---------------------------------------------------------
+    # First try to use molecule.json
+    # ---------------------------------------------------------
+    json_valid = False
+    json_timestep = None
+
     try:
-        with open("output/molecule.json") as f:
+        with open("output/molecule.json", "r") as f:
             molecule_json = json.load(f)
-        
-        xyz_timesteps = check_timestep_file('output/xyz.all')
-        momenta_timesteps = check_timestep_file('output/momenta.all')
-        forces_timesteps = check_timestep_file('output/forces.all')
+
         json_timestep = molecule_json.get('Timestep', 0)
-        for timestep in xyz_timesteps:
-            if timestep in momenta_timesteps and timestep in forces_timesteps:
-                if timestep == json_timestep:
-                    start_step = timestep / gv.timestep
-                    molecule1 = Molecule.from_json('output/molecule.json')
-                    num_atoms = len(molecule1.symbols)
-                    molecule2 = create_empty_molecule(num_atoms)
 
-                    return molecule1, molecule2, start_step
-                else:
-                    print('JSON file disagrees. Reading molecule from XYZ, Momenta, and Forces files.')
-                    symbols, coordinates = read_xyz_file('output/xyz.all', timestep)
-                    momenta = read_momenta_file('output/momenta.all', timestep)
-                    forces, amplitudes, multiplicity, scf_energy, dissociation_flags, coupling = read_forces_file('output/forces.all', timestep)
-                    time = read_times_file('output/time.all', timestep)
-                    masses = setup_masses(symbols)
-                    molecule1 = Molecule(symbols, coordinates, momenta, scf_energy, forces, amplitudes, timestep, multiplicity, dissociation_flags=dissociation_flags, time = time, coupling = coupling, masses = masses)
-                    num_atoms = len(molecule1.symbols)
-                    molecule2 = create_empty_molecule(num_atoms)
-                    start_step = timestep / gv.timestep
+        if json_timestep in common_timesteps:
+            json_valid = True
+        else:
+            print(
+                f"molecule.json timestep {json_timestep} does not "
+                f"agree with the trajectory files."
+            )
 
-                    return molecule1, molecule2, start_step 
+    except FileNotFoundError:
+        print("molecule.json is missing.")
 
-        print('No congruent timestep found. Setting start_step to 0.')
-        return 0
+    except json.JSONDecodeError:
+        print("molecule.json is empty or corrupted.")
 
-    except FileNotFoundError as e:
-        print(f"Error: {e}")
-        return 0
+    # ---------------------------------------------------------
+    # CASE 1: molecule.json is valid
+    # ---------------------------------------------------------
+    if json_valid:
+
+        print(
+            f"Restarting from molecule.json at timestep "
+            f"{json_timestep}"
+        )
+
+        molecule1 = Molecule.from_json('output/molecule.json')
+
+        num_atoms = len(molecule1.symbols)
+        molecule2 = create_empty_molecule(num_atoms)
+
+        start_step = json_timestep / gv.timestep
+
+        return molecule1, molecule2, start_step
+
+    # ---------------------------------------------------------
+    # CASE 2: molecule.json is unavailable or invalid
+    # Reconstruct from the latest common timestep
+    # ---------------------------------------------------------
+    timestep = max(common_timesteps)
+
+    print(
+        f"Reconstructing molecule from trajectory files "
+        f"at timestep {timestep}."
+    )
+
+    symbols, coordinates = read_xyz_file(
+        'output/xyz.all',
+        timestep
+    )
+
+    momenta = read_momenta_file(
+        'output/momenta.all',
+        timestep
+    )
+
+    (
+        forces,
+        amplitudes,
+        multiplicity,
+        scf_energy,
+        dissociation_flags,
+        coupling
+    ) = read_forces_file(
+        'output/forces.all',
+        timestep
+    )
+
+    time = read_times_file(
+        'output/time.all',
+        timestep
+    )
+
+    masses = setup_masses(symbols)
+
+    molecule1 = Molecule(
+        symbols,
+        coordinates,
+        momenta,
+        scf_energy,
+        forces,
+        amplitudes,
+        timestep,
+        multiplicity,
+        dissociation_flags=dissociation_flags,
+        time=time,
+        coupling=coupling,
+        masses=masses
+    )
+
+    # Create a new molecule.json checkpoint
+    molecule1.to_json('output/molecule.json')
+
+    print(
+        f"New molecule.json successfully created "
+        f"at timestep {timestep}."
+    )
+
+    num_atoms = len(molecule1.symbols)
+    molecule2 = create_empty_molecule(num_atoms)
+
+    start_step = timestep / gv.timestep
+
+    return molecule1, molecule2, start_step
+
+#def find_timestep():
+#    """Check and return the congruent timestep from various files."""
+#    try:
+#        with open("output/molecule.json") as f:
+#            molecule_json = json.load(f)
+#        
+#        xyz_timesteps = check_timestep_file('output/xyz.all')
+#        momenta_timesteps = check_timestep_file('output/momenta.all')
+#        forces_timesteps = check_timestep_file('output/forces.all')
+#        json_timestep = molecule_json.get('Timestep', 0)
+#        for timestep in xyz_timesteps:
+#            if timestep in momenta_timesteps and timestep in forces_timesteps:
+#                if timestep == json_timestep:
+#                    start_step = timestep / gv.timestep
+#                    molecule1 = Molecule.from_json('output/molecule.json')
+#                    num_atoms = len(molecule1.symbols)
+#                    molecule2 = create_empty_molecule(num_atoms)
+#
+#                    return molecule1, molecule2, start_step
+#                else:
+#                    print('JSON file disagrees. Reading molecule from XYZ, Momenta, and Forces files.')
+#                    symbols, coordinates = read_xyz_file('output/xyz.all', timestep)
+#                    momenta = read_momenta_file('output/momenta.all', timestep)
+#                    forces, amplitudes, multiplicity, scf_energy, dissociation_flags, coupling = read_forces_file('output/forces.all', timestep)
+#                    time = read_times_file('output/time.all', timestep)
+#                    masses = setup_masses(symbols)
+#                    molecule1 = Molecule(symbols, coordinates, momenta, scf_energy, forces, amplitudes, timestep, multiplicity, dissociation_flags=dissociation_flags, time = time, coupling = coupling, masses = masses)
+#                    num_atoms = len(molecule1.symbols)
+#                    molecule2 = create_empty_molecule(num_atoms)
+#                    start_step = timestep / gv.timestep
+#
+#                    return molecule1, molecule2, start_step 
+#
+#        print('No congruent timestep found. Setting start_step to 0.')
+#        return 0
+#
+#    except FileNotFoundError as e:
+#        print(f"Error: {e}")
+#        return 0
 
 def initialize_simulation():
     """Check if restart is possible and determine the start step."""

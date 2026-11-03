@@ -9,23 +9,31 @@ start_state = None
 method = None
 spin_flip = None
 basis = None
+exchange = None
 gpu = None
 branches = None
 timestep = None
 tot_timesteps = None
 checks = None
 remove_atoms = None
+check_interval = None
 
 # Function to load variables from JSON file
 def load_global_variables():
     global cores,num_states, multiplicity, start_state
-    global method, spin_flip, basis, gpu
+    global method, spin_flip, basis, gpu, exchange, check_interval
     global branches, timestep, tot_timesteps, checks, remove_atoms
     dir = os.getcwd()
     print(dir)
+
     # Open and read the JSON file
-    with open("../../inputs.json", "r") as f:
+    input_file = os.environ.get("PLASMA_INPUTS", "inputs.json")
+
+    with open(input_file, "r") as f:
         inputs = json.load(f)
+
+#    with open("../../inputs.json", "r") as f:
+#        inputs = json.load(f)
     
     # Set global variables from JSON file
     cores = inputs["HPC"]["cores"]
@@ -38,10 +46,12 @@ def load_global_variables():
     method = inputs["Elec_structure"]["method"]
     spin_flip = inputs["Elec_structure"]["Spin_flip"]
     basis = inputs["Elec_structure"]["Basis"]
+    exchange = inputs["Elec_structure"]["Exchange"]
     gpu = inputs["Elec_structure"]["GPU"]
     
     branches = inputs["Propagation"]["Branches"]
     timestep = inputs["Propagation"]["Timestep"]
     tot_timesteps = inputs["Propagation"]["Tot_timesteps"]
     checks = inputs["Propagation"]["Checks"]
+    check_interval = inputs["Propagation"]["Check_interval"]
     remove_atoms = inputs["Propagation"]["Remove_atoms"]

@@ -292,8 +292,8 @@ def forces_magnitudes(molecule):
             out_file.write(f"{force_magnitude}\n")
 
     # Plot force magnitudes after writing files
-    if gv.checks > 1:
-        plot_force_magnitudes(forces_dir)
+    #if gv.checks > 1:
+    plot_force_magnitudes(forces_dir)
 
 def plot_force_magnitudes(directory="checks/forces"):
 
@@ -376,8 +376,8 @@ def displacement_vector(molecule, old_coordinates):
      
 
     # Plot displacement evolution
-    if gv.checks > 1:
-        plot_displacements(disp_dir)
+    #if gv.checks > 1:
+    plot_displacements(disp_dir)
 
 def plot_displacements(directory="checks/displacements"):
     # Ensure directory exists
