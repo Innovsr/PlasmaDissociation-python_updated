@@ -718,138 +718,393 @@ def submit_next_validator(
 # GET PREVIOUS SLURM JOB STATE
 ################################################################################
 
-def get_previous_job_state(
-    job_id
-):
+def get_previous_job_state(job_id):
 
     """
-    Return the overall state of the previous Plasma array.
+    Determine the real state of the previous Plasma array job.
 
-    Important:
+    IMPORTANT:
+    Do NOT treat .batch or .extern job-step states as the state of
+    the Plasma calculation.
 
-    This function does NOT use a stage number.
+    For a Slurm array, inspect the actual array-task records:
 
-    For an array job there may be several states simultaneously.
+        9490413_1
+        9490413_2
+        ...
+        9490413_10
 
-    Examples:
-
-        COMPLETED
-        TIMEOUT
-        CANCELLED
-        FAILED
-        OUT_OF_MEMORY
-
-    Priority:
-
-        CANCELLED
-            -> stop
+    The validator should:
 
         TIMEOUT
-            -> validate/restart
+            -> allow trajectory validation and restart
 
         OUT_OF_MEMORY
-            -> validate/restart
+            -> allow trajectory validation and restart
 
-        COMPLETED
-            -> validate
+        NODE_FAIL
+            -> allow trajectory validation and restart
+
+        PREEMPTED
+            -> allow trajectory validation and restart
+
+        CANCELLED
+            -> stop ONLY if an actual array task was cancelled
 
         FAILED
-            -> stop
+            -> stop ONLY if an actual array task genuinely failed
+
+        COMPLETED
+            -> continue to trajectory validation
+
+    .batch and .extern records are ignored.
     """
 
     if not job_id:
+        print(
+            "WARNING: PREVIOUS_PLASMA_JOB_ID was not supplied."
+        )
         return None
 
     try:
+
+        ########################################################################
+        # Ask sacct specifically for the ARRAY TASK records.
+        #
+        # -X excludes job steps such as:
+        #
+        #       .batch
+        #       .extern
+        #
+        # This is the important correction.
+        ########################################################################
 
         result = subprocess.check_output(
             [
                 "sacct",
                 "-n",
                 "-P",
+                "-X",
                 "-j",
                 str(job_id),
-                "--format=State"
+                "--array",
+                "--format=JobIDRaw,State,ExitCode"
             ],
             text=True,
-            stderr=subprocess.DEVNULL
+            stderr=subprocess.STDOUT
         )
 
-        states = []
+        print(
+            "Raw Plasma array accounting:"
+        )
+
+        print(
+            result
+        )
+
+        ########################################################################
+        # Extract actual array-task states.
+        ########################################################################
+
+        task_states = []
 
         for line in result.splitlines():
 
-            state = line.strip().split("|")[0]
+            line = line.strip()
 
-            if not state:
+            if not line:
                 continue
 
-            # Remove Slurm suffixes such as:
+            fields = line.split("|")
+
+            if len(fields) < 2:
+                continue
+
+            job_id_raw = fields[0].strip()
+            state = fields[1].strip()
+
+            ####################################################################
+            # Ignore the parent array record.
             #
-            # CANCELLED+
-            # TIMEOUT+
+            # We only want:
             #
+            #       9490413_1
+            #       9490413_2
+            #       ...
+            #
+            ####################################################################
+
+            if "_" not in job_id_raw:
+                continue
+
+            ####################################################################
+            # Remove Slurm state suffixes such as:
+            #
+            #       TIMEOUT+
+            #       CANCELLED+
+            ####################################################################
+
             state = state.split("+")[0]
 
-            if state not in states:
-                states.append(state)
+            task_states.append(
+                (job_id_raw, state)
+            )
 
-        print(
-            "Previous Plasma job states:",
-            states
-        )
+        ########################################################################
+        # If no individual task records were returned, fall back to the
+        # allocation record.
+        ########################################################################
 
-        if not states:
+        if not task_states:
+
+            print(
+                "WARNING: No individual array-task records were returned."
+            )
+
+            print(
+                "Trying allocation-level state."
+            )
+
+            fallback = subprocess.check_output(
+                [
+                    "sacct",
+                    "-n",
+                    "-P",
+                    "-X",
+                    "-j",
+                    str(job_id),
+                    "--format=State,ExitCode"
+                ],
+                text=True,
+                stderr=subprocess.STDOUT
+            )
+
+            fallback_states = []
+
+            for line in fallback.splitlines():
+
+                line = line.strip()
+
+                if not line:
+                    continue
+
+                state = line.split("|")[0].strip()
+
+                if not state:
+                    continue
+
+                state = state.split("+")[0]
+
+                fallback_states.append(
+                    state
+                )
+
+            print(
+                "Fallback allocation states:",
+                fallback_states
+            )
+
+            if "TIMEOUT" in fallback_states:
+                return "TIMEOUT"
+
+            if "OUT_OF_MEMORY" in fallback_states:
+                return "OUT_OF_MEMORY"
+
+            if "NODE_FAIL" in fallback_states:
+                return "NODE_FAIL"
+
+            if "PREEMPTED" in fallback_states:
+                return "PREEMPTED"
+
+            if "CANCELLED" in fallback_states:
+                return "CANCELLED"
+
+            if "FAILED" in fallback_states:
+                return "FAILED"
+
+            if fallback_states and all(
+                state == "COMPLETED"
+                for state in fallback_states
+            ):
+                return "COMPLETED"
+
             return None
 
-        #######################################################################
-        # MANUAL CANCELLATION HAS HIGHEST PRIORITY
-        #######################################################################
+        ########################################################################
+        # Print actual task states.
+        ########################################################################
+
+        print(
+            "Actual Plasma array-task states:"
+        )
+
+        for task_id, state in task_states:
+
+            print(
+                f"    {task_id}: {state}"
+            )
+
+        states = [
+            state
+            for _, state in task_states
+        ]
+
+        ########################################################################
+        # IMPORTANT PRIORITY
+        #
+        # A task that timed out should be restartable.
+        #
+        # A task that was genuinely cancelled should stop the chain.
+        #
+        # However, we only consider CANCELLED if it belongs to an actual
+        # array task -- NOT .batch or .extern.
+        ########################################################################
 
         if "CANCELLED" in states:
 
+            print(
+                "Actual Plasma array task was CANCELLED."
+            )
+
             return "CANCELLED"
 
-        #######################################################################
-        # TIMEOUT ALLOWS AUTOMATIC VALIDATION/RESTART
-        #######################################################################
+        ########################################################################
+        # TIMEOUT
+        ########################################################################
 
         if "TIMEOUT" in states:
 
+            print(
+                "At least one Plasma array task TIMED OUT."
+            )
+
+            print(
+                "Automatic trajectory validation/restart is allowed."
+            )
+
             return "TIMEOUT"
 
-        #######################################################################
-        # OOM ALLOWS AUTOMATIC VALIDATION/RESTART
-        #######################################################################
+        ########################################################################
+        # OUT OF MEMORY
+        ########################################################################
 
         if "OUT_OF_MEMORY" in states:
 
+            print(
+                "At least one Plasma array task ran OUT OF MEMORY."
+            )
+
+            print(
+                "Automatic trajectory validation/restart is allowed."
+            )
+
             return "OUT_OF_MEMORY"
 
-        #######################################################################
-        # ALL COMPLETED
-        #######################################################################
+        ########################################################################
+        # NODE FAILURE
+        ########################################################################
 
-        if all(
+        if "NODE_FAIL" in states:
+
+            print(
+                "At least one Plasma array task encountered NODE_FAIL."
+            )
+
+            print(
+                "Automatic trajectory validation/restart is allowed."
+            )
+
+            return "NODE_FAIL"
+
+        ########################################################################
+        # PREEMPTION
+        ########################################################################
+
+        if "PREEMPTED" in states:
+
+            print(
+                "At least one Plasma array task was PREEMPTED."
+            )
+
+            print(
+                "Automatic trajectory validation/restart is allowed."
+            )
+
+            return "PREEMPTED"
+
+        ########################################################################
+        # GENUINE FAILURE
+        ########################################################################
+
+        if "FAILED" in states:
+
+            print(
+                "At least one Plasma array task genuinely FAILED."
+            )
+
+            return "FAILED"
+
+        ########################################################################
+        # ALL TASKS COMPLETED
+        ########################################################################
+
+        if states and all(
             state == "COMPLETED"
             for state in states
         ):
 
+            print(
+                "All Plasma array tasks COMPLETED."
+            )
+
             return "COMPLETED"
 
-        #######################################################################
-        # GENUINE FAILURE
-        #######################################################################
+        ########################################################################
+        # UNKNOWN / MIXED STATE
+        ########################################################################
 
-        if "FAILED" in states:
+        print(
+            "WARNING: Unrecognised or mixed Plasma array states:"
+        )
 
-            return "FAILED"
+        print(
+            states
+        )
 
-        #######################################################################
-        # Otherwise return the first state.
-        #######################################################################
+        ########################################################################
+        # If any task is still running/pending, don't start another restart.
+        ########################################################################
 
-        return states[0]
+        if any(
+            state in {
+                "RUNNING",
+                "PENDING",
+                "CONFIGURING",
+                "COMPLETING"
+            }
+            for state in states
+        ):
+
+            print(
+                "At least one Plasma task is still active."
+            )
+
+            return "RUNNING"
+
+        return states[0] if states else None
+
+    except subprocess.CalledProcessError as exc:
+
+        print(
+            "WARNING: sacct failed while checking previous "
+            "Plasma job."
+        )
+
+        print(
+            exc.output
+        )
+
+        return None
 
     except Exception as exc:
 
@@ -859,7 +1114,155 @@ def get_previous_job_state(
             exc
         )
 
-    return None
+        return None
+
+
+#################################################################################
+## GET PREVIOUS SLURM JOB STATE
+#################################################################################
+#
+#def get_previous_job_state(
+#    job_id
+#):
+#
+#    """
+#    Return the overall state of the previous Plasma array.
+#
+#    Important:
+#
+#    This function does NOT use a stage number.
+#
+#    For an array job there may be several states simultaneously.
+#
+#    Examples:
+#
+#        COMPLETED
+#        TIMEOUT
+#        CANCELLED
+#        FAILED
+#        OUT_OF_MEMORY
+#
+#    Priority:
+#
+#        CANCELLED
+#            -> stop
+#
+#        TIMEOUT
+#            -> validate/restart
+#
+#        OUT_OF_MEMORY
+#            -> validate/restart
+#
+#        COMPLETED
+#            -> validate
+#
+#        FAILED
+#            -> stop
+#    """
+#
+#    if not job_id:
+#        return None
+#
+#    try:
+#
+#        result = subprocess.check_output(
+#            [
+#                "sacct",
+#                "-n",
+#                "-P",
+#                "-j",
+#                str(job_id),
+#                "--format=State"
+#            ],
+#            text=True,
+#            stderr=subprocess.DEVNULL
+#        )
+#
+#        states = []
+#
+#        for line in result.splitlines():
+#
+#            state = line.strip().split("|")[0]
+#
+#            if not state:
+#                continue
+#
+#            # Remove Slurm suffixes such as:
+#            #
+#            # CANCELLED+
+#            # TIMEOUT+
+#            #
+#            state = state.split("+")[0]
+#
+#            if state not in states:
+#                states.append(state)
+#
+#        print(
+#            "Previous Plasma job states:",
+#            states
+#        )
+#
+#        if not states:
+#            return None
+#
+#        #######################################################################
+#        # MANUAL CANCELLATION HAS HIGHEST PRIORITY
+#        #######################################################################
+#
+#        if "CANCELLED" in states:
+#
+#            return "CANCELLED"
+#
+#        #######################################################################
+#        # TIMEOUT ALLOWS AUTOMATIC VALIDATION/RESTART
+#        #######################################################################
+#
+#        if "TIMEOUT" in states:
+#
+#            return "TIMEOUT"
+#
+#        #######################################################################
+#        # OOM ALLOWS AUTOMATIC VALIDATION/RESTART
+#        #######################################################################
+#
+#        if "OUT_OF_MEMORY" in states:
+#
+#            return "OUT_OF_MEMORY"
+#
+#        #######################################################################
+#        # ALL COMPLETED
+#        #######################################################################
+#
+#        if all(
+#            state == "COMPLETED"
+#            for state in states
+#        ):
+#
+#            return "COMPLETED"
+#
+#        #######################################################################
+#        # GENUINE FAILURE
+#        #######################################################################
+#
+#        if "FAILED" in states:
+#
+#            return "FAILED"
+#
+#        #######################################################################
+#        # Otherwise return the first state.
+#        #######################################################################
+#
+#        return states[0]
+#
+#    except Exception as exc:
+#
+#        print(
+#            "WARNING: Could not determine previous "
+#            "Plasma job state:",
+#            exc
+#        )
+#
+#    return None
 
 
 ################################################################################
